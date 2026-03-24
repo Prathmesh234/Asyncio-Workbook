@@ -206,7 +206,6 @@ async def _demo_paginated_fetch():
     print("\n--- DEMO: Paginated API Fetch ---")
 
     async def fetch_pages(total_pages: int):
-        \"\"\"Simulates fetching pages from an API\"\"\"
         for page in range(total_pages):
             print(f"  Fetching page {page}...")
             await asyncio.sleep(0.1)  # API call

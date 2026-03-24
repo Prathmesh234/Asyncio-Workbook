@@ -525,6 +525,18 @@ async def run_fire_and_forget():
 INTERVIEW CONTEXT:
 "How do you get results or exceptions from a Task object?
 When should you use task.result() vs awaiting the task?"
+await task: Cooperatively waits for the task. Other tasks keep running while this coroutine is suspended. The event loop stays active.
+
+task.result(): Gets the result only if already done. Raises InvalidStateError if not ready. No waiting happens - it's instant (either returns or crashes).
+
+using callbacks when 
+
+# Fire and forget - don't need result immediately
+task = asyncio.create_task(send_email(user))
+task.add_done_callback(log_email_sent)  # Just log when done
+
+# Keep going immediately
+return {"status": "email queued"}
 
 REQUIREMENTS:
 1. Create async function `maybe_failing_task(should_fail: bool) -> int`
@@ -551,15 +563,29 @@ True
 True
 """
 
-async def maybe_failing_task(should_fail: bool) -> int:
-    # YOUR CODE HERE
-    pass
+async def maybe_failing_task(should_fail):
+    await asyncio.sleep(0.01)
+    if should_fail:
+        raise ValueError("Task failed intentionally")
+    return 42
+
+async def get_task_outcome(should_fail):
+    task = asyncio.create_task(maybe_failing_task(should_fail))
+
+    try:
+        result = await task
+        return {'done': True, 'cancelled': False, 'has_exception': False, 'result': result}
+    except ValueError:
+        # Task failed (exception), not cancelled
+        return {
+            'done': task.done(),  # True - task is done
+            'cancelled': task.cancelled(),  # False - not cancelled
+            'has_exception': task.exception() is not None,  # True - has exception
+            'result': None  # Return None for failed tasks
+        }
 
 
-async def get_task_outcome(should_fail: bool) -> dict:
-    # YOUR CODE HERE
-    pass
-
+        
 
 # ==============================================================================
 # QUESTION 7: Task Naming and Identification
@@ -568,6 +594,13 @@ async def get_task_outcome(should_fail: bool) -> dict:
 INTERVIEW CONTEXT:
 "In a system with many concurrent tasks, how do you identify and debug
 specific tasks? Demonstrate task naming."
+
+With many concurrent tasks we can basically use a set in order to keep track of all the tasks 
+If a specific task fails or gets a value error kind we just check it with if this task is in the set and then diagnose it 
+also if a task gets completed we simply remove it from the set 
+
+We can also set the names of the tasks using name="ny-task" as one of the args 
+also task.set_name("task") does the same and we can also do task.get_name() to get  the name 
 
 REQUIREMENTS:
 1. Create async function `named_worker(work_id: int) -> str`
@@ -590,14 +623,17 @@ KEY INSIGHT:
 - In Python 3.8+, use asyncio.create_task(coro, name="my-task")
 """
 
-async def named_worker(work_id: int) -> str:
-    # YOUR CODE HERE
-    pass
+async def named_worker(work_id):
+    await asyncio.sleep(0.01)
+    return  f"Work {work_id} done"
 
-
-async def create_named_tasks(count: int) -> list[str]:
-    # YOUR CODE HERE
-    pass
+async def create_named_tasks(count):
+    tasks = []
+    for i in range(count):
+        task = asyncio.create_task(named_worker(i), name=f"worker-{i}")
+        tasks.append(task.get_name())
+    
+    return tasks
 
 
 # ==============================================================================
@@ -607,6 +643,17 @@ async def create_named_tasks(count: int) -> list[str]:
 INTERVIEW CONTEXT:
 "Implement a task manager that tracks multiple tasks and provides
 aggregate operations. This tests understanding of task lifecycle."
+
+We have to implement a task manager which does the following 
+
+1) tracking tasks 
+2) submiting new tasks 
+3) cancelling all tasks 
+4) waiting for all tasks to complete (will have to account for cancelled and failed tasks too )
+5) count the number of active tasks 
+
+Okay to track all the active tasks we will def need a list 
+
 
 REQUIREMENTS:
 Implement the TaskManager class:
@@ -641,27 +688,43 @@ ALGORITHM TIE-IN:
 - This is essentially managing a dynamic collection with lifecycle tracking
 - Similar to thread pool management in multi-threaded systems
 """
-
 class TaskManager:
     def __init__(self):
-        # YOUR CODE HERE
-        pass
-
+        self.task_list = []
+    
     async def submit(self, coro) -> asyncio.Task:
-        # YOUR CODE HERE
-        pass
-
+        task = asyncio.create_task(coro)
+        self.task_list.append(task)
+        return task  # Must return the task
+    
     async def cancel_all(self) -> int:
-        # YOUR CODE HERE
-        pass
-
+        count = 0
+        for task in self.task_list:
+            task.cancel()
+            count += 1
+        return count
+    
     async def wait_all(self) -> list[Any]:
-        # YOUR CODE HERE
-        pass
-
+        # Use return_exceptions=True to handle failed/cancelled tasks gracefully
+        results = await asyncio.gather(*self.task_list, return_exceptions=True)
+        # Convert exceptions to None as per requirements
+        final_results = []
+        for r in results:
+            if not isinstance(r, Exception):
+                final_results.append(r)
+            else:
+                final_results.append(None)
+        return final_results
+    
     def active_count(self) -> int:
-        # YOUR CODE HERE
-        pass
+        # Count only tasks that are NOT done
+        count = 0
+        for task in self.task_list:
+            if not task.done():
+                count += 1
+        return count
+
+
 
 
 # ==============================================================================

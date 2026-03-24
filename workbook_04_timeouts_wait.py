@@ -54,6 +54,8 @@ async def _demo_wait_for():
             _demo_slow_operation(0.1),
             timeout=1.0  # 1 second timeout
         )
+        ##so basically asyncio.wait_For(func, timeout=)
+        #except asyncio.TimeoutError
         print(f"   Success: {result}")
     except asyncio.TimeoutError:
         print("   Timed out!")
@@ -85,6 +87,7 @@ async def _demo_timeout_context():
 
     # Timeout for a block of operations
     print("\n1. Multiple operations under one timeout:")
+    ##the one below looks much better. You can just async with asyncio.timeout(seconds): ....
     try:
         async with asyncio.timeout(0.5):  # Total budget: 0.5s
             result1 = await _demo_slow_operation(0.1)
@@ -138,6 +141,7 @@ async def _demo_wait_modes():
         asyncio.create_task(_demo_racer("Medium", 0.2)),
         asyncio.create_task(_demo_racer("Slow", 0.3)),
     ]
+    ##so basically we do asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     print(f"   Done: {[t.result() for t in done]}")
     print(f"   Still pending: {len(pending)} tasks")
@@ -172,6 +176,20 @@ METHOD 4: asyncio.shield() - Protect from Cancellation
 ======================================================
 Some operations (database commits, file writes) should NOT be cancelled.
 shield() protects the inner operation from cancellation.
+
+VERY IMPORTANT shield  - protects from inner operations 
+
+So the operations we can do are 
+1) asyncio.wait_for(func, timeout=...)
+2) try:
+    async with asyncio.timeout(0.5):
+    ....
+except asyncio.TimeoutError:
+    ....
+3) asyncio.wait(*func,  return_when=asyncio.FIRST_COMPLETED or return_when=asyncio.ALL_COMPLETED etc ....)
+4) asyncio.shield() protect some operations which SHOULD not be canceled 
+
+return await asyncio.shield(_demo_critical_operation())
 """
 
 async def _demo_critical_operation() -> str:
@@ -242,6 +260,8 @@ INTERVIEW CONTEXT:
 "How do you prevent an async operation from hanging indefinitely?
 Implement a timeout pattern using asyncio.wait_for."
 
+to make sure the operation is not hanging indefinetly we implement wait for with a timeout 
+
 REQUIREMENTS:
 1. Create async function `slow_api_call(delay: float) -> str`
    - Sleep for `delay` seconds
@@ -263,15 +283,16 @@ KEY INSIGHT:
 - The coroutine is CANCELLED when timeout occurs
 """
 
-async def slow_api_call(delay: float) -> str:
-    # YOUR CODE HERE
-    pass
+async def slow_api_call(delay):
+    await asyncio.sleep(delay)
+    return "API response"
 
-
-async def fetch_with_timeout(delay: float, timeout: float) -> dict:
-    # YOUR CODE HERE
-    pass
-
+async def fetch_with_timeout(delay, timeout):
+    try:
+        result = await asyncio.wait_for(slow_api_call(delay), timeout=timeout)
+        return {'status': 'success', 'data': 'API response'}
+    except asyncio.TimeoutError:
+        return {'status': 'timeout', 'data': None}
 
 # ==============================================================================
 # QUESTION 2: Context Manager Timeout (Python 3.11+)
@@ -280,6 +301,10 @@ async def fetch_with_timeout(delay: float, timeout: float) -> dict:
 INTERVIEW CONTEXT:
 "Python 3.11 introduced asyncio.timeout(). How does it differ from wait_for?
 When would you use one over the other?"
+
+Okay so asyncio.wait_for(*func, timeout) gives a single function that we can execute via a timeout. However
+if we want to use try: async with asyncio.timeout(timeout) we can actually run a group of tasks together so it is kind of a block of code 
+
 
 REQUIREMENTS:
 1. Create async function `multi_step_operation(steps: list[float]) -> list[str]`
@@ -302,15 +327,24 @@ KEY INSIGHT:
 - timeout() is a context manager that can wrap multiple operations
 - Useful when you want to limit total time for a code block
 """
+async def multi_step_operation(steps):
+    results = []
+    i = 0
+    for step in steps:
+        await asyncio.sleep(step)
+        results.append(f"Step {i} done")
+        i += 1
+    return results
 
-async def multi_step_operation(steps: list[float]) -> list[str]:
-    # YOUR CODE HERE
-    pass
+async def timed_multi_step(steps, timeout):
+    try:
+        async with asyncio.timeout(timeout):
+            ##if you want all the tasks to finish make sure to do await ... 
+            task = await  asyncio.create_task(multi_step_operation(steps))
+            return {'completed': True, 'results': task}
+    except asyncio.TimeoutError:
+         return {'completed': False, 'results': []}
 
-
-async def timed_multi_step(steps: list[float], timeout: float) -> dict:
-    # YOUR CODE HERE
-    pass
 
 
 # ==============================================================================
@@ -320,6 +354,10 @@ async def timed_multi_step(steps: list[float], timeout: float) -> dict:
 INTERVIEW CONTEXT:
 "How would you race multiple async operations and use the first result?
 This is useful for redundant requests or implementing 'fastest wins' patterns."
+Something like this can be used for a wide parallel search for a answer or a task 
+so wait_all() : waits for each and every task to complete 
+however .wait when set a specific boundry respects that boundry 
+we can implement this using asyncio.wait(func, timeout=.....)
 
 REQUIREMENTS:
 1. Create async function `racer(racer_id: int, delay: float) -> dict`
@@ -338,14 +376,30 @@ EXPECTED BEHAVIOR:
 {'racer_id': 2, 'delay': 0.05}  # Racer 2 is fastest
 """
 
-async def racer(racer_id: int, delay: float) -> dict:
-    # YOUR CODE HERE
-    pass
+async def racer(racer_id, delay):
+    await asyncio.sleep(delay)
+    return {"racer_id": racer_id, "delay": delay}
+
+async def race_to_finish(racers):
+    # racers is a list of [(racer_id, delay)]
+    tasks = []
+    for r in racers:
+        racer_id, delay = r
+        tasks.append(asyncio.create_task(racer(racer_id, delay)))
+    
+    # asyncio.wait returns a tuple (done, pending) where both are SETS
+    ##remember we have to do asyncio.FIRST_COMPLETED, asyncio.ALL_COMPLETED ETC 
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    
+    # Cancel remaining pending tasks
+    for p in pending:
+        p.cancel()
+    
+    # Get the first completed task from the set and return its result
+    winner_task = done.pop()  # Extract the one completed task
+    return winner_task.result()  # Return the dict {"racer_id": ..., "delay": ...}
 
 
-async def race_to_finish(racers: list[tuple[int, float]]) -> dict:
-    # YOUR CODE HERE
-    pass
 
 
 # ==============================================================================
@@ -355,6 +409,9 @@ async def race_to_finish(racers: list[tuple[int, float]]) -> dict:
 INTERVIEW CONTEXT:
 "How can you detect when any task fails in a group, without waiting
 for all tasks to complete?"
+
+##WE CAN USE THE SAME METHOD as above - however above as you can see we did asyncio.FIRST_COMPLETED
+HERE WE WILL do asyncio.FIRST_EXCEPTION
 
 REQUIREMENTS:
 1. Create async function `worker(worker_id: int, should_fail: bool, delay: float) -> str`
@@ -378,23 +435,49 @@ EXPECTED BEHAVIOR:
 # Worker 2 fails first after 0.05s
 """
 
-async def worker(worker_id: int, should_fail: bool, delay: float) -> str:
-    # YOUR CODE HERE
-    pass
+async def worker(worker_id, should_fail, delay):
+    await asyncio.sleep(delay)
+    if should_fail:
+        raise ValueError(f"Worker {worker_id} failed")
+    return f"Worker {worker_id} done"
 
+async def run_until_failure(configs):
+    # configs is [(worker_id, should_fail, delay)]
+    # Create tasks for each worker
+    tasks = []
+    for id,should_fail, delay in configs:
+        task = asyncio.create_task(worker(id, should_fail, delay))
+        tasks.append(task)
+    
+    done, pending  = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+    p_count = 0
+    d_count = 0
+    return_bool = False 
+    for task in done:
+        if task.exception() is not None:
+            return_bool = True
+            break
+    for p in pending:
+        p.cancel()
+        p_count += 1
+    for d in done:
+        d_count += 1
+    return {'done_count': d_count, 'pending_count': p_count, 'had_failure': return_bool}
+        
 
-async def run_until_failure(configs: list[tuple[int, bool, float]]) -> dict:
-    # YOUR CODE HERE
-    pass
+        
 
 
 # ==============================================================================
 # QUESTION 5: Shielding Operations from Cancellation
 # ==============================================================================
+
 """
 INTERVIEW CONTEXT:
 "Some operations (like database commits) should not be cancelled midway.
 How do you protect a critical section from cancellation?"
+
+We use the method in asyncio.shield in order to shield the task 
 
 REQUIREMENTS:
 1. Create a list to track: critical_log = []
@@ -431,19 +514,40 @@ KEY INSIGHT:
 - Use for database transactions, critical writes, etc.
 """
 
-async def critical_operation(op_id: int, log: list) -> str:
-    # YOUR CODE HERE
-    pass
+critical_log = []
+
+async def critical_operation(op_id: int, log: list):
+    critical_log.append(f"Starting {op_id}")
+    await asyncio.sleep(0.1)
+    critical_log.append(f"Completed {op_id}")
+    return f"Result {op_id}"
+
+async def protected_operation(op_id: int, log: list):
+    try:
+        # MUST await the shield!
+        return await asyncio.shield(critical_operation(op_id, log))
+    except asyncio.CancelledError:
+        critical_log.append(f"Protected {op_id} from cancel")
+        # Re-raise so the outer task knows it was cancelled
+        raise
+
+async def test_shield():
+    task = asyncio.create_task(protected_operation(1, []))
+    await asyncio.sleep(0.01)  # Let it start
+    task.cancel()
+    
+    # Try to await the cancelled task
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass  # Expected
+    
+    # Wait for shielded operation to complete (0.15s total > 0.1s operation time)
+    await asyncio.sleep(0.15)
+    return critical_log
 
 
-async def protected_operation(op_id: int, log: list) -> str:
-    # YOUR CODE HERE
-    pass
 
-
-async def test_shield() -> list[str]:
-    # YOUR CODE HERE
-    pass
 
 
 # ==============================================================================
@@ -453,6 +557,9 @@ async def test_shield() -> list[str]:
 INTERVIEW CONTEXT:
 "Implement a retry mechanism with exponential backoff for flaky operations.
 This is a common pattern in distributed systems."
+
+we will basically keep a counter of how many times to call the operation 
+first fail_count then we raise ConnectionError
 
 REQUIREMENTS:
 1. Create async function `flaky_operation(fail_count: int) -> str`
@@ -488,18 +595,10 @@ ALGORITHM TIE-IN:
 - Common in network programming to avoid thundering herd
 """
 
-async def flaky_operation(fail_until: int, call_tracker: dict) -> str:
-    # YOUR CODE HERE
-    pass
 
 
-async def retry_with_backoff(
-    operation,
-    max_retries: int = 3,
-    base_delay: float = 0.01
-) -> dict:
-    # YOUR CODE HERE
-    pass
+    
+
 
 
 # ==============================================================================
@@ -550,6 +649,8 @@ INTERVIEW CONTEXT:
 "Implement a deadline pattern where multiple operations must all complete
 within a total time budget, not individual timeouts."
 
+##we will implement the async with timeout way here 
+
 REQUIREMENTS:
 1. Create async function `timed_task(task_id: int, duration: float) -> dict`
    - Sleep for `duration` seconds
@@ -577,16 +678,48 @@ EXPECTED BEHAVIOR:
 """
 
 async def timed_task(task_id: int, duration: float) -> dict:
-    # YOUR CODE HERE
-    pass
+    await asyncio.sleep(duration)
+    return {"task_id": task_id, "duration": duration}
 
 
 async def run_with_deadline(
     tasks: list[tuple[int, float]],
     deadline: float
 ) -> dict:
-    # YOUR CODE HERE
-    pass
+    # Create tasks with tracking
+    task_map = {}  # Map task objects to their IDs
+    met_deadline = True
+    
+    try:
+        async with asyncio.timeout(deadline):
+            for task_id, duration in tasks:
+                task = asyncio.create_task(timed_task(task_id, duration))
+                task_map[task] = task_id
+            # Actually await the tasks to run them!
+            await asyncio.gather(*task_map.keys(), return_exceptions=True)
+    except asyncio.TimeoutError:
+        met_deadline = False
+    
+    # Check which tasks completed vs timed out
+    completed = []
+    timed_out = []
+    
+    for task, task_id in task_map.items():
+        if task.done():
+            try:
+                result = task.result()
+                completed.append(result)
+            except asyncio.CancelledError:
+                # Task was cancelled due to timeout
+                timed_out.append(task_id)
+        else:
+            # Task is still pending (shouldn't happen, but just in case)
+            timed_out.append(task_id)
+    
+    return {'completed': completed, 'timed_out': timed_out, 'met_deadline': met_deadline}
+
+
+            
 
 
 # ==============================================================================
