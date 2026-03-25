@@ -633,6 +633,8 @@ async def depth_first_tree_traversal(tree: dict) -> list[str]:
 INTERVIEW CONTEXT:
 "How do you handle backpressure when producers are faster than consumers?
 Implement a bounded queue with monitoring."
+Backpressure is an issue when the producer is producing faster than the consumer 
+
 
 REQUIREMENTS:
 1. Create async function `fast_producer(queue: asyncio.Queue, count: int, stats: dict) -> None`
@@ -664,23 +666,34 @@ True
 10
 """
 
-async def fast_producer(queue: asyncio.Queue, count: int, stats: dict) -> None:
-    # YOUR CODE HERE
-    pass
+async def fast_producer(queue: asyncio.Queue, count, stats):
+    stats["blocked_count"] = 0
+    for c in range(count):
+        try:
+            queue.put_nowait(c)
+        except asyncio.QueueFull:
+            stats["blocked_count"] += 1
+            ##we add it anyways at the end however we wait for some time 
+            await queue.put(c)
 
+async def slow_consumer(queue: asyncio.Queue, count, delay):
+    return_list = []
+    for _ in range(count):  # ✅ Consume exactly count items
+        await asyncio.sleep(delay)  # ✅ Slow processing delay
+        item = await queue.get()  # ✅ Blocking get - waits for item
+        return_list.append(item)
+    return return_list
 
-async def slow_consumer(queue: asyncio.Queue, count: int, delay: float) -> list:
-    # YOUR CODE HERE
-    pass
-
-
-async def measure_backpressure(
-    queue_size: int,
-    produce_count: int,
-    consume_delay: float
-) -> dict:
-    # YOUR CODE HERE
-    pass
+async def measure_backpressure(queue_size, produce_count, consume_delay):
+    queue = asyncio.Queue(maxsize=queue_size)
+    stats = {}
+    rtn_list = await asyncio.gather(
+        fast_producer(queue, produce_count, stats ), 
+        slow_consumer(queue, produce_count, consume_delay)
+    )
+    #[None, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]] - we will be getting both None and the list itself 
+    print(rtn_list)
+    return {"blocked_count":stats["blocked_count"],"consumed":rtn_list[1]}
 
 
 # ==============================================================================
@@ -690,6 +703,12 @@ async def measure_backpressure(
 INTERVIEW CONTEXT:
 "Implement a work distribution system where idle workers can 'steal' work
 from others. This is a common pattern in parallel computing."
+Ok this is interesting. We will 
+1) Have a queue for each of the worker (a hashmap possibly worker_id: queue object?)
+2) We can do something like a round robin. check size of each of the queue(can we do better here?)
+3) check if own queue is not empty (means have to process), if true then process the items/ If not then steal from the longest queue?
+How to steal? We will need proxy for the longest queue so something to keep track of the longest and the smallest queue
+For now we will check the max size for each of the queue and just pop it/remove it from the queue's last message  
 
 REQUIREMENTS:
 1. Create class `WorkerPool`:
@@ -722,21 +741,84 @@ ALGORITHM TIE-IN:
 """
 
 class WorkerPool:
-    def __init__(self, num_workers: int):
-        # YOUR CODE HERE
-        pass
-
-    async def submit(self, work_item: Any) -> None:
-        # YOUR CODE HERE
-        pass
-
+    def __init__(self, num_workers):
+        self.worker_map = {}
+        self.num_workers = num_workers
+        for worker in range(self.num_workers):
+            queue = asyncio.Queue()
+            self.worker_map[worker] = queue
+    
+    async def submit(self, work_item):
+        shortest_queue_size = float('inf')  # ✅ Start with infinity
+        shortest_queue_id = 0
+        
+        for worker_id, queue in self.worker_map.items():
+            size = queue.qsize()
+            if size < shortest_queue_size:  # ✅ Correct comparison
+                shortest_queue_size = size
+                shortest_queue_id = worker_id
+        
+        await self.worker_map[shortest_queue_id].put(work_item)
     async def worker(self, worker_id: int, results: list, stop_event: asyncio.Event) -> None:
-        # YOUR CODE HERE
-        pass
-
+        while True:
+            my_queue = self.worker_map[worker_id]
+            
+            # Try to get from own queue first
+            if my_queue.qsize() > 0:
+                work_item = await my_queue.get()
+                results.append((worker_id, work_item))  # ✅ Tuple format
+            else:
+                # Try to steal from longest queue
+                longest_queue_size = 0
+                longest_queue_id = None
+                
+                for other_id, other_queue in self.worker_map.items():
+                    if other_id != worker_id:  # Don't steal from self
+                        size = other_queue.qsize()
+                        if size > longest_queue_size:
+                            longest_queue_size = size
+                            longest_queue_id = other_id
+                
+                # If found work to steal
+                if longest_queue_id is not None and longest_queue_size > 0:
+                    try:
+                        work_item = self.worker_map[longest_queue_id].get_nowait()
+                        results.append((worker_id, work_item))  # ✅ Tuple format
+                    except asyncio.QueueEmpty:
+                        pass  # Someone else got it first
+                
+                # Check if we should stop
+                if stop_event.is_set():
+                    # Check if all queues are empty
+                    if all(q.qsize() == 0 for q in self.worker_map.values()):
+                        break
+                
+                # Small delay to avoid busy-waiting
+                await asyncio.sleep(0.001)
+    
     async def run_until_complete(self, work_items: list) -> list:
-        # YOUR CODE HERE
-        pass
+        ##we have also added the stop event to make sure we stop at some point  - signalling all the workers to stop 
+        results = []
+        stop_event = asyncio.Event()
+        for item in work_items:
+            await self.submit(item)
+        
+        #starting the workers 
+        ##we then start all the workers along with a stop event 
+        ##we create different tasks i.e different async tasks for workers to use 
+        worker_tasks = [
+            asyncio.create_task(self.worker(i, results, stop_event))
+            for i in range(self.num_workers)
+        ]
+        await asyncio.sleep(0.1)
+        stop_event.set()
+        await asyncio.gather(*worker_tasks)
+        return results
+
+        
+                
+
+
 
 
 # ==============================================================================
@@ -746,6 +828,10 @@ class WorkerPool:
 INTERVIEW CONTEXT:
 "Design a multi-stage processing pipeline where each stage is connected
 by a queue. This is common in data processing systems."
+
+Okay this is not too bad but we have the input queue and the output queue
+
+
 
 REQUIREMENTS:
 1. Create async function `stage_processor(
@@ -784,13 +870,52 @@ async def stage_processor(
     transform: callable,
     results: list
 ) -> None:
-    # YOUR CODE HERE
-    pass
-
+    while True:
+        val = await input_queue.get()
+        if val is None:
+            ##making sure to check if the val is valid or not 
+            if output_queue is not None:
+                await output_queue.put(None)
+            break
+        transformed = transform(val)
+        if output_queue is not None:
+             await output_queue.put(transformed)
+        results.append((name, transformed))
 
 async def run_pipeline(data: list[int]) -> dict:
-    # YOUR CODE HERE
-    pass
+    ##we need 3 queues 
+    q0_to_s1 = asyncio.Queue()  # Input → Stage 1
+    q1_to_s2 = asyncio.Queue()  # Stage 1 → Stage 2
+    q2_to_s3 = asyncio.Queue()  # Stage 2 → Stage 3
+    
+    results = []
+    
+    # Add initial data + sentinel
+    for d in data:
+        await q0_to_s1.put(d)
+    ##sentinel value to stop the pipeline 
+    await q0_to_s1.put(None)  # ✅ Sentinel to stop pipeline
+    
+    # Define transforms for each stage
+    def multiply_by_2(x): return x * 2
+    def add_10(x): return x + 10
+    def to_string(x): return str(x)
+    
+    # Run all 3 stages CONCURRENTLY
+    await asyncio.gather(
+        ##these are 3 seperate pipelines 
+        stage_processor("Stage1", q0_to_s1, q1_to_s2, multiply_by_2, results),
+        stage_processor("Stage2", q1_to_s2, q2_to_s3, add_10, results),
+        stage_processor("Stage3", q2_to_s3, None, to_string, results),  # ✅ No output queue for last stage
+    )
+    
+    # Extract final outputs (only from Stage3)
+    final_outputs = [val for name, val in results if name == "Stage3"]
+    
+    return {
+        "final_outputs": final_outputs,
+        "stage_results": results
+    }
 
 
 # ==============================================================================
