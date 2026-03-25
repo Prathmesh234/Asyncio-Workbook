@@ -18,6 +18,7 @@ Learning Objectives:
 import asyncio
 from typing import Any, AsyncIterator, AsyncGenerator
 from contextlib import asynccontextmanager
+import math
 
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
@@ -258,6 +259,8 @@ INTERVIEW CONTEXT:
 "What's the difference between a regular generator and an async generator?
 Implement an async generator that yields values with delays."
 
+async generator basically enables us to yield and then pass onto the next part of it. Basically approaching it in a lazy way 
+
 REQUIREMENTS:
 1. Create async generator `async_range(start: int, stop: int, delay: float) -> AsyncGenerator[int, None]`
    - Yield integers from start to stop (exclusive), like range()
@@ -280,8 +283,10 @@ KEY INSIGHT:
 """
 
 async def async_range(start: int, stop: int, delay: float) -> AsyncGenerator[int, None]:
-    # YOUR CODE HERE
-    pass
+    for num in range(start, stop):
+        await asyncio.sleep(delay)
+        yield num
+
 
 
 # ==============================================================================
@@ -321,16 +326,20 @@ KEY INSIGHT:
 
 class AsyncCountdown:
     def __init__(self, start: int, delay: float):
-        # YOUR CODE HERE
-        pass
+        self.current = start  # Track current countdown position
+        self.delay = delay
 
     def __aiter__(self):
-        # YOUR CODE HERE
-        pass
+        return self  # Return the iterator (self)
 
     async def __anext__(self) -> int:
-        # YOUR CODE HERE
-        pass
+        if self.current < 0:  # Done counting
+            raise StopAsyncIteration
+        await asyncio.sleep(self.delay)  # Async delay
+        value = self.current
+        self.current -= 1  # Countdown
+        return value
+        
 
 
 # ==============================================================================
@@ -361,6 +370,10 @@ EXPECTED BEHAVIOR:
     [{'id': 2, 'page': 1}, {'id': 3, 'page': 1}],
     [{'id': 4, 'page': 2}]
 ]
+page 0 - items 0, 1
+page 1- items 2, 3
+page 2  - items 4
+(start=0, end=5)
 
 ALGORITHM TIE-IN:
 - This is chunked iteration - O(n) items, O(n/k) yields
@@ -368,8 +381,20 @@ ALGORITHM TIE-IN:
 """
 
 async def paginated_fetch(total_items: int, page_size: int) -> AsyncGenerator[list[dict], None]:
-    # YOUR CODE HERE
-    pass
+    #now we have to determine at which point each new page starts
+    ##as we can see each page as two items 
+    total_pages = math.ceil(total_items / page_size)
+    for page in range(total_pages):
+        #simulating page fetch with a delay 
+        await asyncio.sleep(0.15)
+        #0+2, 2 
+        start = page*page_size
+        end = min(start+page_size, total_items)
+        return_page = [{"id": i, "page":page} for i in range(start, end)]
+        yield return_page
+
+
+    
 
 
 # ==============================================================================
@@ -416,20 +441,30 @@ EXPECTED BEHAVIOR:
 
 class AsyncResource:
     def __init__(self, name: str, setup_time: float, teardown_time: float):
-        # YOUR CODE HERE
-        pass
+        self.name = name,
+        self.setup_time = setup_time
+        self.teardown_time = teardown_time
+        self.is_open = False 
+        self.operations = []
 
     async def __aenter__(self):
-        # YOUR CODE HERE
-        pass
+        await asyncio.sleep(self.setup_time)
+        self.operations.append(f"opened")
+        self.is_open = True
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        # YOUR CODE HERE
-        pass
+        await asyncio.sleep(self.teardown_time)
+        self.is_open = False
+        self.operations.append("closed")
+        return False
 
     async def do_work(self, work_id: int):
-        # YOUR CODE HERE
-        pass
+        self.operations.append(f"work_{work_id}")
+        await asyncio.sleep(0.15)
+        return f"Completed {work_id}"
+
+        
 
 
 # ==============================================================================

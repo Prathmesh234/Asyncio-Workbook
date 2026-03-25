@@ -108,11 +108,13 @@ async def _demo_producer_consumer():
     async def producer(name: str, items: list):
         for item in items:
             await asyncio.sleep(0.1)  # Simulate work
+            ##this is how we add to the queue - in python you know for deque we do appendLeft right
             await queue.put(item)
             print(f"  {name} produced: {item}")
         await queue.put(None)  # Sentinel to signal "done"
 
     async def consumer(name: str):
+        ##while True because we keep processing it 
         while True:
             item = await queue.get()
             if item is None:  # Check sentinel
@@ -131,8 +133,12 @@ async def _demo_producer_consumer():
 """
 BACKPRESSURE WITH BOUNDED QUEUES:
 =================================
+
 When producers are faster than consumers, use maxsize to create backpressure.
 Producers will wait when queue is full.
+
+max_size to create backpressure
+Producers have to wait 
 """
 
 async def _demo_backpressure():
@@ -208,6 +214,8 @@ PRIORITY QUEUE:
 ===============
 Items are retrieved in priority order (lowest first).
 Wrap items in tuples: (priority, data)
+
+tuples - Priority, data 
 """
 
 async def _demo_priority_queue():
@@ -229,6 +237,8 @@ async def _demo_priority_queue():
     while not pq.empty():
         priority, item = await pq.get()
         print(f"  Priority {priority}: {item}")
+
+#    await q.join()  # waits here until both task_done() calls happen
 
 
 """
@@ -282,6 +292,18 @@ COMMON PATTERNS:
 
 Now try the exercises below!
 ================================================================================
+
+async def worker(q):
+    item = await q.get()
+    try:
+        await process(item)
+    except Exception as e:
+        # handle failure — log, retry, dead letter queue etc.
+        await dead_letter_queue.put(item)  # send to separate failure queue
+    finally:
+        q.task_done()  # ALWAYS call in finally, success or failure
+```
+finally is always called regardless of the condition 
 """
 
 
@@ -292,6 +314,10 @@ Now try the exercises below!
 INTERVIEW CONTEXT:
 "Explain the basic operations of asyncio.Queue and how it differs from
 queue.Queue in the standard library."
+
+asyncio.Queue is asynchronous queue, basically handling operations async when needed. 
+So it gives a coroutine and we do not have for the task to finish. Also there are q.get.no_wait() operations where we can skip a heavy lifted process of getting from teh queue and directly get the value 
+
 
 REQUIREMENTS:
 1. Create async function `basic_queue_operations() -> dict`
@@ -317,8 +343,25 @@ KEY INSIGHT:
 """
 
 async def basic_queue_operations() -> dict:
-    # YOUR CODE HERE
-    pass
+    q = asyncio.Queue(maxsize=3)
+    await q.put(1)
+    await q.put(2)
+    await q.put(3)
+    items = []
+    was_full = not q.empty()
+    if not q.empty():
+        while not q.empty() :
+            item = await q.get()
+            items.append(item)
+    return {
+        "items": items,
+        "was_full": was_full,
+        "is_empty": q.empty()  # True now since drained
+    }
+
+
+
+
 
 
 # ==============================================================================
