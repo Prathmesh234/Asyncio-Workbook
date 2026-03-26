@@ -277,6 +277,8 @@ INTERVIEW CONTEXT:
 "You have a legacy synchronous function that blocks. How do you integrate
 it with asyncio without blocking the event loop?"
 
+##We can just runt he synchronous function on the thread using the threadpoolexecutor 
+
 REQUIREMENTS:
 1. Create SYNCHRONOUS function `blocking_io_operation(duration: float) -> str`
    - Use time.sleep (NOT asyncio.sleep!) to simulate blocking I/O
@@ -307,18 +309,22 @@ KEY INSIGHT:
 """
 
 def blocking_io_operation(duration: float) -> str:
-    # YOUR CODE HERE - use time.sleep, NOT asyncio.sleep
-    pass
+    time.sleep(duration)
+    return f"Completed after {duration}s"
 
 
-async def run_blocking_async(duration: float) -> str:
-    # YOUR CODE HERE
-    pass
+async def run_blocking_async(duration: float, executor=None) -> str:
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(executor, blocking_io_operation, duration) 
+    return result
+
 
 
 async def run_multiple_blocking(durations: list[float]) -> list[str]:
-    # YOUR CODE HERE
-    pass
+    with ThreadPoolExecutor() as e:
+        tasks = [run_blocking_async(d, executor=e) for d in durations]
+        return await asyncio.gather(*tasks)
+    
 
 
 # ==============================================================================
@@ -328,6 +334,15 @@ async def run_multiple_blocking(durations: list[float]) -> list[str]:
 INTERVIEW CONTEXT:
 "How do you control the number of threads used for blocking operations?
 What are the tradeoffs of different pool sizes?"
+
+We can control the number of threads using max_workers if we want. More threads means more work can be done in parallel, 
+however a tradeoff of a large pool size is GIL will still prevent us from having executing python interpretor between two threads. 
+
+Memory Overhead: Each thread consumes a significant amount of memory (stack space). 
+Too many threads will eventually lead to an OutOfMemory error.
+Context Switching: The OS has to work harder to switch between 1,000 threads 
+than between 10. If you have more threads than CPU cores, the CPU spends more time 
+"managing" the threads than actually doing work.
 
 REQUIREMENTS:
 1. Create SYNCHRONOUS function `cpu_light_blocking(task_id: int, duration: float) -> dict`
@@ -355,8 +370,9 @@ True
 """
 
 def cpu_light_blocking(task_id: int, duration: float) -> dict:
-    # YOUR CODE HERE
-    pass
+    time.sleep(duration)
+    return {"task_id": task_id, "thread": threading.current_thread().name}
+
 
 
 async def run_with_custom_pool(
@@ -364,8 +380,17 @@ async def run_with_custom_pool(
     max_workers: int,
     duration: float
 ) -> dict:
-    # YOUR CODE HERE
-    pass
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers==max_workers) as e:
+        ##we have to run task_count currently
+        result = [loop.run_in_executor(e, cpu_light_blocking,t,  duration) for t in range(task_count)]
+        results = await asyncio.gather(*result)
+    ##this wil be list of hashmaps [{"task_id": task_id, "thread": threading.current_thread().name}, ...]
+    final_results = set()
+    for map in results:
+        final_results.add(map["thread"])
+    return { "results": results, "unique_threads": final_results}
+
 
 
 # ==============================================================================
@@ -375,6 +400,8 @@ async def run_with_custom_pool(
 INTERVIEW CONTEXT:
 "File operations are blocking. How do you read multiple files concurrently
 without blocking the asyncio event loop?"
+
+we get the event loop and then on each of the thread schedule a async file read operation which is blocking 
 
 REQUIREMENTS:
 1. Create SYNCHRONOUS function `read_file_sync(filepath: str) -> str`
@@ -404,18 +431,48 @@ import tempfile
 import shutil
 
 def read_file_sync(filepath: str) -> str:
-    # YOUR CODE HERE
-    pass
+    try:
+        with open(filepath, 'r') as file:
+            return file.read()
+    except FileNotFoundError:
+        return "FILE_NOT_FOUND"
+
+
 
 
 async def read_files_async(filepaths: list[str]) -> list[str]:
-    # YOUR CODE HERE
-    pass
+    ##we have to use the executor right 
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor() as e:
+        result = [loop.run_in_executor(e, read_file_sync, filepath) for filepath in filepaths]
+        final_read = await asyncio.gather(*result)
+    return final_read
 
 
 async def write_and_read_test() -> dict:
-    # YOUR CODE HERE
-    pass
+    loop = asyncio.get_event_loop()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        filepaths = [os.path.join(tmp_dir, f"test_{i}.txt") for i in range(1, 4)]
+        contents = [f"content_{i}" for i in range(1, 4)]
+        
+        # Helper for writing
+        def write_file(path, data):
+            with open(path, 'w') as f:
+                f.write(data)
+        
+        # Write files concurrently using executor
+        await asyncio.gather(*[
+            loop.run_in_executor(None, write_file, path, content)
+            for path, content in zip(filepaths, contents)
+        ])
+        
+        # Read them all back concurrently using read_files_async
+        read_contents = await read_files_async(filepaths)
+        
+        return {
+            "files_read": len(read_contents),
+            "contents": read_contents
+        }
 
 
 # ==============================================================================
@@ -425,6 +482,11 @@ async def write_and_read_test() -> dict:
 INTERVIEW CONTEXT:
 "Design a system that makes async HTTP calls AND processes files (blocking)
 in the same workflow without blocking."
+
+##async http calls and processes files without blocking 
+##http calls can we made via a non blocking asyncio way 
+## for the processing of the files which is blocking we can just get the event loop and move the processing over to it 
+
 
 REQUIREMENTS:
 1. Create async function `fetch_data_async(url_id: int, delay: float) -> dict`
@@ -458,25 +520,28 @@ True
 True
 """
 
-async def fetch_data_async(url_id: int, delay: float = 0.05) -> dict:
-    # YOUR CODE HERE
-    pass
+async def fetch_data_async(url_id: int, delay: float):
+    await asyncio.sleep(delay)
+    return {"source": "api", "id": url_id}
+
+def process_data_sync(data: dict, processing_time: float):
+    #fetch data synchornously and simulate block processing with time.sleep()
+    time.sleep(processing_time)
+    return {"processed": True, **data}
+async def fetch_and_process(url_id):
+    data = await fetch_data_async(url_id, delay=0.01)
+    ##process the data using the process_data_sync 
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, process_data_sync, data, 0.01)
+    return result
+
+async def batch_fetch_and_process(ids: list[int]):
+    tasks = [fetch_and_process(url_id) for url_id in ids]
+    return await asyncio.gather(*tasks)
 
 
-def process_data_sync(data: dict, processing_time: float = 0.05) -> dict:
-    # YOUR CODE HERE
-    pass
 
-
-async def fetch_and_process(url_id: int) -> dict:
-    # YOUR CODE HERE
-    pass
-
-
-async def batch_fetch_and_process(ids: list[int]) -> list[dict]:
-    # YOUR CODE HERE
-    pass
-
+    
 
 # ==============================================================================
 # QUESTION 5: Thread-Safe Communication
@@ -485,6 +550,10 @@ async def batch_fetch_and_process(ids: list[int]) -> list[dict]:
 INTERVIEW CONTEXT:
 "How do you safely communicate between executor threads and the asyncio
 event loop? This is crucial for avoiding race conditions."
+
+##we use a lock to make sure threading.Lock() and never to use asyncio.Lock()
+self._lock = threading.Lock() can be used in this case 
+we can basically modify using with self._lock: self._total += value 
 
 REQUIREMENTS:
 1. Create class `ThreadSafeAccumulator`:
@@ -519,27 +588,40 @@ KEY INSIGHT:
 - asyncio.Lock is for coroutines, not threads!
 """
 
+#ThreadSafeAccumulator() can also have the self._lock which sets the lock
+# and then we can do with self._lock .... operations
 class ThreadSafeAccumulator:
     def __init__(self):
-        # YOUR CODE HERE
-        pass
+        ## we will have to inializing the lock 
+        self._lock = threading.Lock()
+        self._total = 0
 
     def add_sync(self, value: int) -> None:
-        # YOUR CODE HERE
-        pass
+        with self._lock:
+            self._total += value 
+
 
     async def add_async(self, value: int) -> None:
-        # YOUR CODE HERE
-        pass
+        with self._lock:
+            self._total += value 
 
     def get_total(self) -> int:
-        # YOUR CODE HERE
-        pass
+        ##we have to keep adding self._lock....
+        with self._lock:
+            return self._total
 
 
 async def test_thread_safety() -> dict:
-    # YOUR CODE HERE
-    pass
+    acc  = ThreadSafeAccumulator()
+    loop = asyncio.get_event_loop()
+    await asyncio.gather(
+        *[loop.run_in_executor(None, acc.add_sync, 1) for _ in range(100)], 
+        *[acc.add_async(1) for _ in range(100)] 
+    )
+    total = acc.get_total()
+    return {"total": total, "expected": 200}
+
+    
 
 
 # ==============================================================================
@@ -549,6 +631,9 @@ async def test_thread_safety() -> dict:
 INTERVIEW CONTEXT:
 "How do you handle blocking operations that might hang? Implement
 timeout handling for executor tasks."
+##we will have to implement timeout
+result = await asyncio.wait_for(coro, timeout=timeout)
+we can add the timeout=timeout which helps us in setting the timeout
 
 REQUIREMENTS:
 1. Create SYNCHRONOUS function `potentially_hanging_operation(hang: bool) -> str`
@@ -574,13 +659,25 @@ WARNING:
 """
 
 def potentially_hanging_operation(hang: bool) -> str:
-    # YOUR CODE HERE
-    pass
+    if hang:
+        time.sleep(10)
+        return "never reached"
+    else:
+        time.sleep(0.01) 
+        return "success"
+
 
 
 async def run_with_timeout(hang: bool, timeout: float) -> dict:
-    # YOUR CODE HERE
-    pass
+    loop = asyncio.get_event_loop()
+    coro = loop.run_in_executor(None, potentially_hanging_operation, hang)
+    try:
+        ##asyncio.wait_for(coro, timeout) gives us the timeout that we can use 
+        result = await asyncio.wait_for(coro, timeout=timeout)
+        return {"status": "success", "result": result}
+    except asyncio.TimeoutError:
+        return {"status": "timeout", "result": None}
+
 
 
 # ==============================================================================
@@ -590,6 +687,20 @@ async def run_with_timeout(hang: bool, timeout: float) -> dict:
 INTERVIEW CONTEXT:
 "Implement a connection pool that manages blocking database connections
 within an async application."
+
+managing blocking database connections within the async application 
+"A Semaphore is a synchronization primitive that limits concurrent access to a 
+shared resource using an internal counter."
+Use Case Example: "In an async application, it's commonly used as a 'Gatekeeper' for limited external 
+resources like database connection pools or rate-limited API endpoints."
+
+If you create asyncio.Semaphore(3), it starts with the number 3 in its pocket.
+
+Starts at 3: All 3 spots are available.
+Acquire (-1): A thread takes a spot. The counter is now 2.
+Acquire (-1): Another thread takes a spot. The counter is now 1.
+Acquire (-1): A third thread takes a spot. The counter is now 0.
+THE BLOCK: If a 4th thread tries to acquire, it sees the counter is 0. It doesn't reset; it just sits there and waits.
 
 REQUIREMENTS:
 Implement class `AsyncConnectionPool`:
@@ -624,16 +735,20 @@ EXPECTED BEHAVIOR:
 
 class AsyncConnectionPool:
     def __init__(self, max_connections: int):
-        # YOUR CODE HERE
-        pass
-
+        self.sem = asyncio.Semaphore(max_connections)
+        self.executor = ThreadPoolExecutor()
+   
     async def execute(self, query: str, delay: float = 0.01) -> str:
-        # YOUR CODE HERE
-        pass
+        async with self.sem:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                self.executor, time.sleep, delay
+            )
+        return f"Result: {query}"
+       
 
     async def close(self):
-        # YOUR CODE HERE
-        pass
+        self.executor.shutdown()
 
 
 # ==============================================================================
@@ -644,15 +759,22 @@ INTERVIEW CONTEXT:
 "Design a data pipeline that efficiently mixes async I/O (network) with
 blocking I/O (file processing) and CPU-light transformations."
 
+##we will have a blocking file processing with a cpu transformation and the async io network call 
+
 REQUIREMENTS:
+##simple asyncio.sleep and then return a list of dict 
 1. Create async function `fetch_batch(batch_id: int, size: int) -> list[dict]`
    - Simulate fetching `size` items with async sleep (0.02s)
    - Return [{"batch": batch_id, "item": i} for i in range(size)]
 
+##this is a cpu blocking function we will keep it simple and cpu blocking 
 2. Create SYNCHRONOUS function `transform_item(item: dict) -> dict`
    - Blocking transformation (time.sleep 0.01s)
+
+   ##we written this ** because we are basically copying from the memory. We are using copy of the item 
    - Return {**item, "transformed": True}
 
+## 
 3. Create SYNCHRONOUS function `save_item(item: dict) -> str`
    - Blocking save (time.sleep 0.01s)
    - Return f"saved_{item['batch']}_{item['item']}"
@@ -681,24 +803,47 @@ EXPECTED BEHAVIOR:
 """
 
 async def fetch_batch(batch_id: int, size: int) -> list[dict]:
-    # YOUR CODE HERE
-    pass
+    await asyncio.sleep(0.02)
+    return [{"batch": batch_id, "item": i} for i in range(size)]
+
 
 
 def transform_item(item: dict) -> dict:
-    # YOUR CODE HERE
-    pass
+    time.sleep(0.01)
+    return {**item, "transformed": True}
+
 
 
 def save_item(item: dict) -> str:
-    # YOUR CODE HERE
-    pass
+    time.sleep(0.01)
+    return f"saved_{item['batch']}_{item['item']}"
+   
 
 
 async def process_pipeline(batch_count: int, items_per_batch: int) -> dict:
-    # YOUR CODE HERE
-    pass
+    loop  = asyncio.get_event_loop()
+    batches = await asyncio.gather(
+        *[fetch_batch(id, items_per_batch)  for id in range(batch_count)]
+    )
+    #now we have to transform all the batches right 
+    #we can transform it using 
+    all_items = [item for batch in batches for item in batch]
 
+    ##transform the items 
+    transform_items = await asyncio.gather(
+        *[loop.run_in_executor(None, transform_item, item) for item in all_items]
+    )
+    ## save all the items together concurrenrly 
+    saved_results = await asyncio.gather(
+        *[loop.run_in_executor(None, save_item, item) for item in transform_items]
+
+    )
+    return {
+        "batches_fetched": len(batches),
+        "items_transformed": len(transform_items),
+        "items_saved": len(saved_results)
+    }
+    
 
 # ==============================================================================
 # MAIN - Test Your Solutions
